@@ -458,7 +458,7 @@ async def on_ready():
     await update_tracker_message()
 
 
-@bot.command(name="b2")
+@bot.command(name="b2monitor")
 @commands.has_permissions(manage_messages=True)
 async def setup_b2(ctx):
     await ctx.message.delete()
