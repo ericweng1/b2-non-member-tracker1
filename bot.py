@@ -87,8 +87,10 @@ def format_duration(minutes: int) -> str:
 def build_embed():
     now = int(time.time())
     embed = discord.Embed(
-        title="🚇 B2 Subway Line — Open Channel Tracker",
+        title="🚇 B2 Subway Line — Community Channel Tracker",
         description=(
+            "**Community-run tracker for B2 channels.** Timers are based on members "
+            "surfing channels and asking non-members for their remaining times.\n\n"
             "Use the **Dropdown** to switch pages (**1–15**, **16–30**, **31–40**).\n"
             "Click **any Channel Button** to enter or update its remaining timer!"
         ),
@@ -107,7 +109,7 @@ def build_embed():
         else:
             if ch in channel_data:
                 del channel_data[ch]
-            entry = f"**Ch {ch}:** 🟢 *Open*"
+            entry = f"**Ch {ch}:** ⚠️ *Needs Update*"
 
         if ch <= 20:
             lines_left.append(entry)
@@ -219,12 +221,12 @@ class ClearChannelModal(discord.ui.Modal, title="Clear Channel Timer"):
 
         if cleared:
             await interaction.response.send_message(
-                f"🛡️ Cleared **Ch {ch}** back to open.", ephemeral=True
+                f"🛡️ Cleared **Ch {ch}** back to needs update.", ephemeral=True
             )
             await update_tracker_message()
         else:
             await interaction.response.send_message(
-                f"ℹ️ **Ch {ch}** is already open.", ephemeral=True
+                f"ℹ️ **Ch {ch}** is already marked as needs update.", ephemeral=True
             )
 
 
@@ -273,7 +275,7 @@ class ChannelButton(discord.ui.Button):
         style = (
             discord.ButtonStyle.secondary
             if is_taken
-            else discord.ButtonStyle.success
+            else discord.ButtonStyle.danger
         )
         super().__init__(
             label=f"Ch {ch_num}",
@@ -291,7 +293,7 @@ class ClearChannelButton(discord.ui.Button):
     def __init__(self):
         super().__init__(
             label="🗑️ Clear a Channel",
-            style=discord.ButtonStyle.danger,
+            style=discord.ButtonStyle.secondary,
             custom_id="monitor_clear_btn",
             row=4,
         )
