@@ -10,9 +10,7 @@ from flask import Flask
 # --- CONFIGURATION ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 TOTAL_CHANNELS = 40
-DEFAULT_MINUTES = 98
-HELPER_ROLE_NAME = "B2 Helper"
-DATA_FILE = "b2_channels.json"
+DATA_FILE = "b2_monitor_data.json"
 # ---------------------
 
 # --- KEEP-ALIVE WEB SERVER ---
@@ -20,7 +18,7 @@ app = Flask("")
 
 @app.route("/")
 def home():
-    return "B2 Subway Tracker Bot is online!"
+    return "B2 Subway Monitor Bot is online!"
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
@@ -42,14 +40,7 @@ current_page = 1
 data_lock = asyncio.Lock()
 
 
-def is_helper(member: discord.Member) -> bool:
-    if member.guild_permissions.administrator:
-        return True
-    return any(role.name == HELPER_ROLE_NAME for role in member.roles)
-
-
 def save_data_sync():
-    """Synchronous save – never call this directly from the event loop."""
     try:
         with open(DATA_FILE, "w") as f:
             json.dump(
@@ -65,7 +56,6 @@ def save_data_sync():
 
 
 async def save_data():
-    """Non-blocking save."""
     await asyncio.to_thread(save_data_sync)
 
 
@@ -97,13 +87,12 @@ def format_duration(minutes: int) -> str:
 def build_embed():
     now = int(time.time())
     embed = discord.Embed(
-        title="🚇 B2 Subway Line — Jr. Wraith Channel Tracker",
+        title="🚇 B2 Subway Line — Open Channel Tracker",
         description=(
-            "Use the **Dropdown** to switch channel pages (**1–15**, **16–30**,"
-            " **31–40**).\nClick a **Channel Button** to claim it for"
-            f" **{format_duration(DEFAULT_MINUTES)}**, or edit/leave below."
+            "Use the **Dropdown** to switch pages (**1–15**, **16–30**, **31–40**).\n"
+            "Click **any Channel Button** to enter or update its remaining timer!"
         ),
-        color=discord.Color.purple(),
+        color=discord.Color.blue(),
     )
 
     lines_left = []
@@ -113,7 +102,7 @@ def build_embed():
         info = channel_data.get(ch)
         if info and info["end_time"] > now:
             entry = (
-                f"**Ch {ch}:** <@{info['user_id']}> — expires <t:{info['end_time']}:R>"
+                f"**Ch {ch}:** <@{info['user_id']}> updated — expires <t:{info['end_time']}:R>"
             )
         else:
             if ch in channel_data:
@@ -158,12 +147,12 @@ async def update_tracker_message():
         print(f"[update_tracker] HTTPException: {e}")
 
 
-class EditTimerModal(discord.ui.Modal, title="Edit Remaining Channel Time"):
+class SetChannelTimeModal(discord.ui.Modal, title="Set Channel Timer"):
     minutes_input = discord.ui.TextInput(
-        label=f"Minutes Remaining (1 to {DEFAULT_MINUTES})",
-        placeholder="e.g., 45",
+        label="Minutes Remaining",
+        placeholder="e.g., 45 or 98",
         min_length=1,
-        max_length=2,
+        max_length=3,
         required=True,
     )
 
@@ -174,10 +163,9 @@ class EditTimerModal(discord.ui.Modal, title="Edit Remaining Channel Time"):
     async def on_submit(self, interaction: discord.Interaction):
         try:
             mins = int(self.minutes_input.value)
-            if mins < 1 or mins > DEFAULT_MINUTES:
+            if mins < 1:
                 await interaction.response.send_message(
-                    f"❌ Please enter a number between **1** and **{DEFAULT_MINUTES}**.",
-                    ephemeral=True,
+                    "❌ Please enter a positive number of minutes.", ephemeral=True
                 )
                 return
         except ValueError:
@@ -187,21 +175,19 @@ class EditTimerModal(discord.ui.Modal, title="Edit Remaining Channel Time"):
             return
 
         async with data_lock:
-            if self.ch_num not in channel_data:
-                await interaction.response.send_message(
-                    f"❌ **Ch {self.ch_num}** is no longer claimed.", ephemeral=True
-                )
-                return
-            channel_data[self.ch_num]["end_time"] = int(time.time()) + (mins * 60)
+            channel_data[self.ch_num] = {
+                "user_id": interaction.user.id,
+                "end_time": int(time.time()) + (mins * 60),
+            }
 
         await interaction.response.send_message(
-            f"✅ Updated **Ch {self.ch_num}** timer to **{mins} minutes**.",
+            f"✅ Updated **Ch {self.ch_num}** timer to **{mins} mins** ({format_duration(mins)}).",
             ephemeral=True,
         )
         await update_tracker_message()
 
 
-class HelperClearModal(discord.ui.Modal, title="Helper Clear Channel"):
+class ClearChannelModal(discord.ui.Modal, title="Clear Channel Timer"):
     ch_input = discord.ui.TextInput(
         label=f"Channel Number to Clear (1 to {TOTAL_CHANNELS})",
         placeholder="e.g., 14",
@@ -233,7 +219,7 @@ class HelperClearModal(discord.ui.Modal, title="Helper Clear Channel"):
 
         if cleared:
             await interaction.response.send_message(
-                f"🛡️ Cleared **Ch {ch}**.", ephemeral=True
+                f"🛡️ Cleared **Ch {ch}** back to open.", ephemeral=True
             )
             await update_tracker_message()
         else:
@@ -248,19 +234,19 @@ class ChannelPageSelect(discord.ui.Select):
             discord.SelectOption(
                 label="Channels 1 – 15",
                 value="1",
-                description="Show claim buttons for Ch 1 through Ch 15",
+                description="Show buttons for Ch 1 through Ch 15",
                 default=(current_page_num == 1),
             ),
             discord.SelectOption(
                 label="Channels 16 – 30",
                 value="2",
-                description="Show claim buttons for Ch 16 through Ch 30",
+                description="Show buttons for Ch 16 through Ch 30",
                 default=(current_page_num == 2),
             ),
             discord.SelectOption(
                 label="Channels 31 – 40",
                 value="3",
-                description="Show claim buttons for Ch 31 through Ch 40",
+                description="Show buttons for Ch 31 through Ch 40",
                 default=(current_page_num == 3),
             ),
         ]
@@ -269,7 +255,7 @@ class ChannelPageSelect(discord.ui.Select):
             min_values=1,
             max_values=1,
             options=options,
-            custom_id="channel_page_select",
+            custom_id="monitor_page_select",
             row=0,
         )
 
@@ -292,125 +278,26 @@ class ChannelButton(discord.ui.Button):
         super().__init__(
             label=f"Ch {ch_num}",
             style=style,
-            custom_id=f"claim_ch_{ch_num}",
+            custom_id=f"monitor_ch_{ch_num}",
             row=row_num,
         )
         self.ch_num = ch_num
 
     async def callback(self, interaction: discord.Interaction):
-        now = int(time.time())
-
-        async with data_lock:
-            current = channel_data.get(self.ch_num)
-            if current and current["end_time"] > now:
-                if current["user_id"] != interaction.user.id:
-                    await interaction.response.send_message(
-                        f"⚠️ **Ch {self.ch_num}** is currently claimed by"
-                        f" <@{current['user_id']}>.",
-                        ephemeral=True,
-                    )
-                    return
-                else:
-                    await interaction.response.send_message(
-                        f"ℹ️ You already hold **Ch {self.ch_num}**. Use **Edit Timer** to"
-                        " adjust your time.",
-                        ephemeral=True,
-                    )
-                    return
-
-            # Release any other channel this user currently holds
-            for ch, info in list(channel_data.items()):
-                if info["user_id"] == interaction.user.id:
-                    del channel_data[ch]
-
-            channel_data[self.ch_num] = {
-                "user_id": interaction.user.id,
-                "end_time": now + (DEFAULT_MINUTES * 60),
-            }
-
-        await interaction.response.send_message(
-            f"🚇 You claimed **Ch {self.ch_num}** for **{format_duration(DEFAULT_MINUTES)}**!",
-            ephemeral=True,
-        )
-        await update_tracker_message()
+        await interaction.response.send_modal(SetChannelTimeModal(self.ch_num))
 
 
-class EditTimerButton(discord.ui.Button):
+class ClearChannelButton(discord.ui.Button):
     def __init__(self):
         super().__init__(
-            label="⏱️ Edit My Timer",
-            style=discord.ButtonStyle.primary,
-            custom_id="edit_my_timer",
-            row=4,
-        )
-
-    async def callback(self, interaction: discord.Interaction):
-        now = int(time.time())
-        user_ch = next(
-            (
-                ch
-                for ch, info in channel_data.items()
-                if info["user_id"] == interaction.user.id and info["end_time"] > now
-            ),
-            None,
-        )
-        if not user_ch:
-            await interaction.response.send_message(
-                "❌ You don't currently have a channel claimed!", ephemeral=True
-            )
-            return
-        await interaction.response.send_modal(EditTimerModal(user_ch))
-
-
-class LeaveChannelButton(discord.ui.Button):
-    def __init__(self):
-        super().__init__(
-            label="🚪 Leave Channel",
+            label="🗑️ Clear a Channel",
             style=discord.ButtonStyle.danger,
-            custom_id="leave_my_channel",
+            custom_id="monitor_clear_btn",
             row=4,
         )
 
     async def callback(self, interaction: discord.Interaction):
-        async with data_lock:
-            user_ch = next(
-                (
-                    ch
-                    for ch, info in channel_data.items()
-                    if info["user_id"] == interaction.user.id
-                ),
-                None,
-            )
-            if not user_ch:
-                await interaction.response.send_message(
-                    "❌ You don't have a channel claimed.", ephemeral=True
-                )
-                return
-            del channel_data[user_ch]
-
-        await interaction.response.send_message(
-            f"✅ You released **Ch {user_ch}**.", ephemeral=True
-        )
-        await update_tracker_message()
-
-
-class HelperClearButton(discord.ui.Button):
-    def __init__(self):
-        super().__init__(
-            label="🛡️ Helper Clear",
-            style=discord.ButtonStyle.secondary,
-            custom_id="helper_clear_btn",
-            row=4,
-        )
-
-    async def callback(self, interaction: discord.Interaction):
-        if not is_helper(interaction.user):
-            await interaction.response.send_message(
-                f"❌ Only users with the **{HELPER_ROLE_NAME}** role can use this.",
-                ephemeral=True,
-            )
-            return
-        await interaction.response.send_modal(HelperClearModal())
+        await interaction.response.send_modal(ClearChannelModal())
 
 
 class TrackerView(discord.ui.View):
@@ -428,9 +315,7 @@ class TrackerView(discord.ui.View):
             is_taken = bool(info and info["end_time"] > now)
             self.add_item(ChannelButton(ch, is_taken, row_num))
 
-        self.add_item(EditTimerButton())
-        self.add_item(LeaveChannelButton())
-        self.add_item(HelperClearButton())
+        self.add_item(ClearChannelButton())
 
 
 @tasks.loop(seconds=45)
@@ -454,16 +339,15 @@ async def on_ready():
     bot.add_view(TrackerView(page=current_page))
     if not cleanup_expired.is_running():
         cleanup_expired.start()
-    print(f"Logged in as {bot.user}!")
+    print(f"Monitor Bot logged in as {bot.user}!")
     await update_tracker_message()
 
 
 @bot.command(name="b2monitor")
 @commands.has_permissions(manage_messages=True)
-async def setup_b2(ctx):
+async def setup_b2_monitor(ctx):
     await ctx.message.delete()
 
-    # Delete the previous tracker message if it still exists
     old_ch_id = tracker_message_info.get("channel_id")
     old_msg_id = tracker_message_info.get("message_id")
     if old_ch_id and old_msg_id:
@@ -475,54 +359,12 @@ async def setup_b2(ctx):
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                 pass
 
-    # Send the new tracker
     msg = await ctx.send(embed=build_embed(), view=TrackerView(page=1))
     tracker_message_info["channel_id"] = msg.channel.id
     tracker_message_info["message_id"] = msg.id
     global current_page
     current_page = 1
     await save_data()
-
-
-@bot.command()
-async def clear_ch(ctx, ch: int):
-    if not is_helper(ctx.author):
-        return
-    await ctx.message.delete()
-
-    cleared = False
-    async with data_lock:
-        if ch in channel_data:
-            del channel_data[ch]
-            cleared = True
-
-    if cleared:
-        await update_tracker_message()
-        try:
-            await ctx.send(f"🛡️ Cleared **Ch {ch}**.", delete_after=5)
-        except discord.HTTPException:
-            pass
-    else:
-        try:
-            await ctx.send(f"ℹ️ **Ch {ch}** is already open.", delete_after=5)
-        except discord.HTTPException:
-            pass
-
-
-@bot.command()
-async def clear_all(ctx):
-    if not is_helper(ctx.author):
-        return
-    await ctx.message.delete()
-
-    async with data_lock:
-        channel_data.clear()
-
-    await update_tracker_message()
-    try:
-        await ctx.send("🛡️ All channels cleared.", delete_after=5)
-    except discord.HTTPException:
-        pass
 
 
 if __name__ == "__main__":
